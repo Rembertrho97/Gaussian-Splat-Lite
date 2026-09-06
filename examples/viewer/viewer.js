@@ -129,7 +129,7 @@ function createAxes(webGPU) {
     [0x0000ff, [0, 0, -halfSize, 0, 0, halfSize]],
   ]) {
     const geometry = new LineGeometry().setPositions(positions);
-    const material = createReferenceMaterial(webGPU, color, 2, 0.8);
+    const material = createReferenceMaterial(webGPU, color, 1.5, 0.8);
     const line = new Line(geometry, material);
     line.raycast = () => {};
     group.add(line);
