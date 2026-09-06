@@ -12,6 +12,7 @@ import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 import { Line2 as WebGPULine2 } from "three/addons/lines/webgpu/Line2.js";
 import { LineSegments2 as WebGPULineSegments2 } from "three/addons/lines/webgpu/LineSegments2.js";
+import { Fn, materialColor, materialOpacity, uv, vec2, vec4 } from "three/tsl";
 import { Line2NodeMaterial, WebGPURenderer } from "three/webgpu";
 import { CameraController } from "./cameraController.js";
 import { createFrameGate } from "./frameGate.js";
@@ -54,6 +55,7 @@ const renderOptionsPanel = document.querySelector("#render-options");
 const renderOptionsClose = document.querySelector("#render-options-close");
 const renderOptionsContent = document.querySelector("#render-options-content");
 const renderOptionsReset = document.querySelector("#render-options-reset");
+const performanceStats = document.querySelector("#performance-stats");
 const performanceFps = document.querySelector("#performance-fps");
 const performanceHeap = document.querySelector("#performance-heap");
 const performanceHeapStat = performanceHeap.closest(".performance-stat");
@@ -67,6 +69,9 @@ const EXAMPLE_MODEL = {
 
 const scene = new THREE.Scene();
 const controlsOverlayScene = new THREE.Scene();
+
+// XZ reference at Y = 0; scaled to the loaded model in frameSplat.
+const referenceBaseSize = 10;
 function createReferenceMaterial(webGPU, color, linewidth, opacity) {
   const Material = webGPU ? Line2NodeMaterial : LineMaterial;
   const material = new Material({
@@ -79,12 +84,22 @@ function createReferenceMaterial(webGPU, color, linewidth, opacity) {
     toneMapped: false,
     alphaToCoverage: false,
   });
+  if (webGPU) {
+    // Blend directly instead of sampling Line2NodeMaterial's viewport copy,
+    // which is recreated on resize and differs between canvas/resolve targets.
+    material.blending = THREE.NormalBlending;
+    material.fragmentNode = Fn(() => {
+      const lineUv = uv();
+      const cap = vec2(lineUv.x, lineUv.y.abs().sub(1));
+      // Keep the round endcaps of these solid, screen-space lines.
+      lineUv.y.abs().greaterThan(1).and(cap.dot(cap).greaterThan(1)).discard();
+      return vec4(materialColor.rgb, materialOpacity);
+    })();
+  }
   material.userData.referenceColor = color;
   return material;
 }
 
-// XZ reference at Y = 0; scaled to the loaded model in frameSplat.
-const referenceBaseSize = 10;
 function createGrid(webGPU) {
   const halfSize = referenceBaseSize / 2;
   const positions = [];
@@ -99,7 +114,7 @@ function createGrid(webGPU) {
   const Line = webGPU ? WebGPULineSegments2 : LineSegments2;
   const line = new Line(
     geometry,
-    createReferenceMaterial(webGPU, 0x334155, 1, 0.5),
+    createReferenceMaterial(webGPU, 0x666666, 1, 0.5),
   );
   line.raycast = () => {};
   return line;
@@ -526,14 +541,25 @@ async function switchRendererBackend(webGPU) {
   let nextRenderer;
   let nextControls;
   let nextSplatRenderer;
+  let nextInspector;
   try {
     if (webGPU) {
+      const { Inspector } = await import("three/addons/inspector/Inspector.js");
       nextRenderer = new WebGPURenderer(rendererParameters);
       await nextRenderer.init();
       if (nextRenderer.backend?.isWebGPUBackend !== true) {
         throw new Error("WebGPU is not available in this browser");
       }
       configureRenderer(nextRenderer);
+      nextInspector = new Inspector();
+      // Leave the built-in Parameters tab hidden: only FPS and Inspector.
+      nextInspector.parameters.hide();
+      nextInspector.domElement.classList.add("viewer-inspector");
+      nextInspector.profiler.toggleButton.setAttribute(
+        "aria-label",
+        "Toggle Three.js Inspector",
+      );
+      nextInspector.profiler.toggleButton.title = "Three.js Inspector";
     } else {
       // WebGL requires a linear working space when it configures texture
       // unpacking. Preserve the active WebGPU setting until the final handoff.
@@ -567,6 +593,7 @@ async function switchRendererBackend(webGPU) {
     controlsOverlayScene.add(nextControls.indicator);
     nextControls.minDistance = controls.minDistance;
   } catch (error) {
+    nextInspector?.dispose();
     nextControls?.dispose();
     nextSplatRenderer?.dispose();
     nextRenderer?.dispose();
@@ -579,6 +606,7 @@ async function switchRendererBackend(webGPU) {
   }
 
   if (switchToken !== rendererSwitchToken) {
+    nextInspector?.dispose();
     nextControls.dispose();
     nextSplatRenderer.dispose();
     nextRenderer.dispose();
@@ -618,6 +646,12 @@ async function switchRendererBackend(webGPU) {
 
   previousSplatRenderer.dispose();
   previousRenderer.dispose();
+  performanceStats.hidden = webGPU;
+  if (webGPU) {
+    // Mount first so Inspector's auto-attach cannot move it into the viewport.
+    performanceStats.before(nextInspector.domElement);
+    renderer.inspector = nextInspector;
+  }
   syncRendererOption(webGPU);
   renderer.setAnimationLoop(renderFrame);
   requestRender();
