@@ -18,12 +18,10 @@ const raycastDirection = new THREE.Vector3();
 
 export type SplatMeshOptions = {
   url?: string;
+  file?: Blob;
   fileBytes?: Uint8Array | ArrayBuffer;
   fileType?: SplatFileType;
   fileName?: string;
-  stream?: ReadableStream;
-  /** Optional stream byte-length estimate used for progress reporting. */
-  streamLength?: number;
   /** Declarative per-splat transform executed in the decode worker. */
   postDecode?: SplatPostDecodeProgram;
   splats?: Splats;
@@ -51,13 +49,13 @@ export type SplatMeshFrameContext = {
 function validateSplatMeshInitializationInputs(options: SplatMeshOptions) {
   const inputs: string[] = [];
   if (options.url !== undefined) inputs.push("url");
+  if (options.file !== undefined) inputs.push("file");
   if (options.fileBytes !== undefined) inputs.push("fileBytes");
-  if (options.stream !== undefined) inputs.push("stream");
   if (options.splats !== undefined) inputs.push("splats");
   if (options.constructSplats !== undefined) inputs.push("constructSplats");
   if (inputs.length > 1) {
     throw new Error(
-      `SplatMesh initialization inputs are mutually exclusive; provide only one of url, fileBytes, stream, splats, or constructSplats (received: ${inputs.join(", ")})`,
+      `SplatMesh initialization inputs are mutually exclusive; provide only one of url, file, fileBytes, splats, or constructSplats (received: ${inputs.join(", ")})`,
     );
   }
 }
@@ -108,11 +106,10 @@ export class SplatMesh extends THREE.Object3D {
       options.splats ??
       new Splats({
         url: options.url,
+        file: options.file,
         fileBytes: options.fileBytes,
         fileType: options.fileType,
         fileName: options.fileName,
-        stream: options.stream,
-        streamLength: options.streamLength,
         postDecode: options.postDecode,
         maxSplats: options.maxSplats,
         construct: options.constructSplats,

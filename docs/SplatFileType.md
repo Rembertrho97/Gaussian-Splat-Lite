@@ -8,10 +8,11 @@ Supported file formats:
 enum SplatFileType {
   PLY = "ply",
   SPZ = "spz",
+  SOG = "sog",
 }
 ```
 
-Usually inferred from a `.ply` or `.spz` URL or `fileName`. Otherwise, set it explicitly:
+Usually inferred from a `.ply`, `.spz`, `.sog`, or SOG `meta.json` URL or `fileName`. Otherwise, set it explicitly:
 
 ```js
 import { SplatFileType, SplatMesh } from "gaussian-splat-lite";
@@ -22,4 +23,4 @@ const splat = new SplatMesh({
 });
 ```
 
-`SplatMesh`, `Splats`, and `SplatLoader.loadInternal()` accept this option for URL, byte, and stream input.
+`SplatMesh` and `Splats` accept this option for URL, file, and byte input. `SplatLoader.load()` and `loadAsync()` infer the format from the URL or file contents.

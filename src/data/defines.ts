@@ -13,6 +13,7 @@ export const SPLAT_TEX_MIN_HEIGHT = 1;
 export enum SplatFileType {
   PLY = "ply",
   SPZ = "spz",
+  SOG = "sog",
 }
 
 export type SplatExtra = {

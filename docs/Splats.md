@@ -23,18 +23,17 @@ The constructor and `initialize()` accept `SplatsOptions`:
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `url` | `string` | `undefined` | PLY/SPZ file URL |
+| `url` | `string` | `undefined` | PLY/SPZ/SOG file or SOG metadata URL |
+| `file` | `Blob` (including `File`) | `undefined` | Local file; PLY/SPZ stream internally, SOG uses random reads |
 | `fileBytes` | `Uint8Array \| ArrayBuffer` | `undefined` | In-memory file data |
 | `fileType` | `SplatFileType` | Inferred from name | Explicit file format |
-| `fileName` | `string` | `undefined` | Name used to infer byte or stream input format |
-| `stream` | `ReadableStream` | `undefined` | Chunked input stream |
-| `streamLength` | `number` | `undefined` | Optional input-stream byte-length estimate used for progress reporting |
+| `fileName` | `string` | `File.name` when available | Name used to infer the input format |
 | `postDecode` | `SplatPostDecodeProgram` | `undefined` | **`Experimental`** Serializable per-Splat transform executed in the decode worker |
 | `maxSplats` | `number` | `0` | Initial capacity |
 | `construct` | `(splats) => void \| Promise<void>` | `undefined` | Populates the source during initialization |
 | `onProgress` | `(event: ProgressEvent) => void` | `undefined` | Loading progress callback |
 
-Choose at most one of `url`, `fileBytes`, `stream`, or `construct`; mixing inputs throws.
+Choose at most one of `url`, `file`, `fileBytes`, or `construct`; mixing inputs throws.
 
 `initialize()` returns `initialized`. A newer initialization supersedes earlier loading or construction results.
 
@@ -51,7 +50,7 @@ Choose at most one of `url`, `fileBytes`, `stream`, or `construct`; mixing input
 | `removeSplats(indices)` | Removes the indexed Splats and compacts the surviving records in their original order |
 | `forEachCenter(callback)` | Iterates centers only, suitable for spatial-index construction |
 | `forEachSplat(callback)` | Iterates and fully decodes every Splat |
-| `initialize(options)` | Initializes or replaces data from a file, stream, or construction callback |
+| `initialize(options)` | Initializes or replaces data from a URL, file, bytes, or construction callback |
 | `dispose()` | Releases textures and data references |
 
 ## Data rules

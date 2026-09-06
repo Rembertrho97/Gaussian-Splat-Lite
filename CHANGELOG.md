@@ -9,6 +9,8 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Added ordinary SOG V1/V2 loading from ZIP bundles or directory metadata, with automatic HTTP Range access and grouped decoding that prefetches the next group's compressed images through the existing PLY/SPZ loading API.
+- Added `.sog` support to the viewer's file picker, drag-and-drop, and URL loading.
 - Added WebGPU rendering with TSL shaders and compute-based Splat accumulation into compact GPU storage. WebGL2 remains supported.
 - Added `synchronousSort` for same-frame GPU radix sorting on WebGPU or main-thread WASM sorting on WebGL. Asynchronous Worker/WASM sorting remains the default.
 - Added `stochastic`, `autoStochastic`, and `renderDepth` options for sorting-free transparency during camera motion and companion depth draws. Companion depth draws process Splats in input order with stochastic coverage.
@@ -18,6 +20,8 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Replaced `stream`/`streamLength` loading inputs with `file: Blob` (including `File`). PLY/SPZ stream directly in the worker; local SOG files use random reads without buffering the whole archive. Viewer URL loads now use the URL loader for all formats.
+- Read and flush packed Splat buffers independently, skipping old-data reads for complete decode batches.
 - Moved built-in Splat color conversion to the vertex shader in WebGPU and WebGL.
 - Trimmed wide-kernel coverage using a conservative alpha bound in both rendering backends. Wide kernels retain their original minimum-pixel-radius visibility cutoff.
 - Simplified documentation into a README quick start and focused API references, consolidating duplicate guides and examples.
@@ -30,6 +34,9 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Routed remote SOG files in the viewer directly through the URL loader so HTTP Range reads and grouped download/decode overlap remain available.
+- Reported known SOG download sizes through progress callbacks so URL loading displays a percentage, with indeterminate progress when the total is unknown.
+- Preserved the SH2 coefficient sharing the SH1 texture when updating SH1, and cleared unused SH padding.
 - Initialized WebGPU projection dimensions before the orthographic/perspective branch so orthographic Splats render correctly.
 - Validated gzip header checksums, payload checksums, and decoded sizes for legacy SPZ files, rejecting missing trailers and trailing data. Optional gzip headers remain supported across input chunks.
 - Validated SPZ v4 Zstandard checksums and declared frame sizes against the stream table, rejecting corrupt or inconsistent files.

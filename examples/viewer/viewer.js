@@ -66,6 +66,7 @@ const EXAMPLE_MODEL = {
 };
 
 const scene = new THREE.Scene();
+const controlsOverlayScene = new THREE.Scene();
 function createReferenceMaterial(webGPU, color, linewidth, opacity) {
   const Material = webGPU ? Line2NodeMaterial : LineMaterial;
   const material = new Material({
@@ -98,7 +99,7 @@ function createGrid(webGPU) {
   const Line = webGPU ? WebGPULineSegments2 : LineSegments2;
   const line = new Line(
     geometry,
-    createReferenceMaterial(webGPU, 0x334155, 1.5, 0.5),
+    createReferenceMaterial(webGPU, 0x334155, 1, 0.5),
   );
   line.raycast = () => {};
   return line;
@@ -113,7 +114,7 @@ function createAxes(webGPU) {
     [0x0000ff, [0, 0, -halfSize, 0, 0, halfSize]],
   ]) {
     const geometry = new LineGeometry().setPositions(positions);
-    const material = createReferenceMaterial(webGPU, color, 3, 0.8);
+    const material = createReferenceMaterial(webGPU, color, 2, 0.8);
     const line = new Line(geometry, material);
     line.raycast = () => {};
     group.add(line);
@@ -173,6 +174,7 @@ viewport.append(renderer.domElement);
 let controls = new CameraController(renderer, scene, camera, {
   worldUp: camera.up,
 });
+controlsOverlayScene.add(controls.indicator);
 
 let needsRender = true;
 let renderOnDemand = true;
@@ -229,11 +231,21 @@ function renderFrame(time) {
     return;
   }
 
-  // void splatRenderer.update({ scene, camera });
   // Synchronous preparation is consumed by this draw; worker completion can
   // still request a later frame through onDirty.
   needsRender = false;
   stochasticResolvePass.compose(renderer, scene, camera);
+  // Draw the anchor after resolve so stochastic filtering cannot blur it.
+  // Its material disables depth testing/writes, so no depth clear is needed.
+  if (controls.indicator.visible) {
+    const previousAutoClear = renderer.autoClear;
+    try {
+      renderer.autoClear = false;
+      renderer.render(controlsOverlayScene, camera);
+    } finally {
+      renderer.autoClear = previousAutoClear;
+    }
+  }
   frameGate.submitted();
   updateStats(time, true);
 }
@@ -244,7 +256,6 @@ let splatRenderer = new GaussianSplatRenderer({
   renderer,
   onDirty: requestRender,
   autoStochastic: true,
-  // autoUpdate: false,
 });
 scene.add(splatRenderer);
 
@@ -539,7 +550,6 @@ async function switchRendererBackend(webGPU) {
     nextSplatRenderer = new GaussianSplatRenderer({
       renderer: nextRenderer,
       onDirty: requestRender,
-      // autoUpdate: false,
     });
     for (const group of renderOptionGroups) {
       for (const option of group.options) {
@@ -554,6 +564,7 @@ async function switchRendererBackend(webGPU) {
     nextControls = new CameraController(nextRenderer, scene, camera, {
       worldUp: camera.up,
     });
+    controlsOverlayScene.add(nextControls.indicator);
     nextControls.minDistance = controls.minDistance;
   } catch (error) {
     nextControls?.dispose();
@@ -652,84 +663,86 @@ function applyRenderOption(option, value) {
   requestRender();
 }
 
+function createElement(tag, className) {
+  const element = document.createElement(tag);
+  element.className = className;
+  return element;
+}
+
+function createRenderOptionRow(option) {
+  const isToggle = typeof option.defaultValue === "boolean";
+  const row = createElement("div", "option-row");
+  const copy = createElement("div", "option-copy");
+  const label = document.createElement("label");
+  label.htmlFor = `render-option-${option.property}`;
+  label.textContent = option.label ?? option.property;
+  const description = document.createElement("p");
+  description.textContent = option.description;
+  copy.append(label, description);
+
+  const control = createElement("div", "option-control");
+  const input = createElement(
+    "input",
+    isToggle ? "toggle-input" : "range-input",
+  );
+  input.id = label.htmlFor;
+  input.dataset.renderOption = option.property;
+  const output = createElement(
+    "output",
+    isToggle ? "toggle-value" : "range-value",
+  );
+  output.setAttribute("for", input.id);
+
+  const getValue = () => (isToggle ? input.checked : Number(input.value));
+  const sync = (value = getValue()) => {
+    output.value = isToggle
+      ? value
+        ? option.trueLabel
+        : option.falseLabel
+      : option.format(value);
+    output.textContent = output.value;
+  };
+  const update = () => {
+    const value = getValue();
+    sync(value);
+    applyRenderOption(option, value);
+  };
+
+  if (isToggle) {
+    row.classList.add("option-row-toggle");
+    input.type = "checkbox";
+    input.checked = option.defaultValue;
+    const toggle = createElement("label", "toggle-track");
+    toggle.htmlFor = input.id;
+    toggle.setAttribute("aria-hidden", "true");
+    control.append(output, input, toggle);
+    input.syncOption = sync;
+  } else {
+    input.type = "range";
+    input.min = String(option.min);
+    input.max = String(option.max);
+    input.step = String(option.step);
+    input.value = String(option.defaultValue);
+    control.append(output, input);
+  }
+
+  input.addEventListener(isToggle ? "change" : "input", update);
+  input.updateOption = update;
+  renderOptionInputs.set(option.property, { input, option, row });
+  input.updateOption();
+  row.append(copy, control);
+  return row;
+}
+
 function createRenderOptions() {
   for (const group of renderOptionGroups) {
-    const section = document.createElement("section");
-    section.className = "option-group";
-
-    const heading = document.createElement("div");
-    heading.className = "option-group-heading";
+    const section = createElement("section", "option-group");
+    const heading = createElement("div", "option-group-heading");
     heading.innerHTML = `<h3>${group.title}</h3><p>${group.description}</p>`;
     section.append(heading);
 
     for (const option of group.options) {
-      const row = document.createElement("div");
-      row.className = "option-row";
-
-      const copy = document.createElement("div");
-      copy.className = "option-copy";
-      const label = document.createElement("label");
-      label.htmlFor = `render-option-${option.property}`;
-      label.textContent = option.label ?? option.property;
-      const description = document.createElement("p");
-      description.textContent = option.description;
-      copy.append(label, description);
-
-      const control = document.createElement("div");
-      control.className = "option-control";
-      const input = document.createElement("input");
-      input.id = label.htmlFor;
-      input.dataset.renderOption = option.property;
-
-      if (typeof option.defaultValue === "boolean") {
-        row.classList.add("option-row-toggle");
-        input.type = "checkbox";
-        input.className = "toggle-input";
-        input.checked = option.defaultValue;
-        const toggle = document.createElement("label");
-        toggle.className = "toggle-track";
-        toggle.htmlFor = input.id;
-        toggle.setAttribute("aria-hidden", "true");
-        const value = document.createElement("output");
-        value.className = "toggle-value";
-        value.setAttribute("for", input.id);
-        const sync = () => {
-          value.value = input.checked ? option.trueLabel : option.falseLabel;
-          value.textContent = value.value;
-        };
-        const update = () => {
-          sync();
-          applyRenderOption(option, input.checked);
-        };
-        input.addEventListener("change", update);
-        control.append(value, input, toggle);
-        input.syncOption = sync;
-        input.updateOption = update;
-      } else {
-        input.type = "range";
-        input.className = "range-input";
-        input.min = String(option.min);
-        input.max = String(option.max);
-        input.step = String(option.step);
-        input.value = String(option.defaultValue);
-        const value = document.createElement("output");
-        value.className = "range-value";
-        value.setAttribute("for", input.id);
-        const update = () => {
-          const numericValue = Number(input.value);
-          value.value = option.format(numericValue);
-          value.textContent = value.value;
-          applyRenderOption(option, numericValue);
-        };
-        input.addEventListener("input", update);
-        control.append(value, input);
-        input.updateOption = update;
-      }
-
-      renderOptionInputs.set(option.property, { input, option, row });
-      input.updateOption();
-      row.append(copy, control);
-      section.append(row);
+      section.append(createRenderOptionRow(option));
     }
 
     renderOptionsContent.append(section);
@@ -742,6 +755,11 @@ function setRenderOptionsOpen(open) {
   renderOptionsPanel.hidden = !open;
   renderOptionsToggle.setAttribute("aria-expanded", String(open));
   if (open) renderOptionsClose.focus();
+}
+
+function closeRenderOptions() {
+  setRenderOptionsOpen(false);
+  renderOptionsToggle.focus();
 }
 
 function syncBackgroundInteractivity() {
@@ -776,6 +794,11 @@ function setSourcePanelOpen(open, { moveFocus = false } = {}) {
   }
 }
 
+function closeSourcePanel() {
+  setSourcePanelOpen(false);
+  sourcePanelToggle.focus();
+}
+
 function resetRenderOptions() {
   const entries = Array.from(renderOptionInputs.values());
   for (const { input, option } of entries) {
@@ -800,7 +823,6 @@ createRenderOptions();
 const frameSize = new THREE.Vector3();
 let activeSplat = null;
 let activeLoad = 0;
-let activeLoadController = null;
 let dragDepth = 0;
 let toastTimer;
 const remoteRequestByButton = new WeakMap();
@@ -826,6 +848,7 @@ function fileTypeFor(file) {
   const name = file.name.toLowerCase();
   if (name.endsWith(".ply")) return SplatFileType.PLY;
   if (name.endsWith(".spz")) return SplatFileType.SPZ;
+  if (name.endsWith(".sog")) return SplatFileType.SOG;
   return undefined;
 }
 
@@ -946,9 +969,6 @@ function cancelLoading() {
 
   const sourcePanelOpen = !emptyState.hidden;
   activeLoad += 1;
-  const controller = activeLoadController;
-  activeLoadController = null;
-  controller?.abort();
   clearLoading();
   setStatus("Loading canceled");
 
@@ -982,46 +1002,39 @@ function frameSplat(splat) {
   controls.setCamera(camera);
 }
 
-async function loadFile(
-  file,
-  { credit = "", remoteController = null, loadToken = null } = {},
-) {
+async function loadFile(file, { credit = "", url, button } = {}) {
   const fileType = fileTypeFor(file);
   if (!fileType) {
-    showToast("Unsupported file. Choose a .ply or .spz file.");
-    setStatus("Only PLY and SPZ files are supported", "error");
+    showToast("Unsupported file. Choose a .ply, .spz, or .sog file.");
+    setStatus("Only PLY, SPZ, and SOG files are supported", "error");
     return;
   }
 
-  const controller = remoteController ?? new AbortController();
-  if (activeLoadController && activeLoadController !== controller) {
-    activeLoadController.abort();
+  const loadId = ++activeLoad;
+  if (button) {
+    remoteRequestByButton.set(button, loadId);
+    button.disabled = true;
   }
-  activeLoadController = controller;
-
-  const loadId = loadToken ?? ++activeLoad;
   setLoading(file);
   setStatus(`Loading ${file.name}`, "loading");
 
-  const stream = file
-    .stream()
-    .pipeThrough(new TransformStream(), { signal: controller.signal });
-  const candidate = new SplatMesh({
-    fileName: file.name,
-    fileType,
-    stream,
-    streamLength: file.size || undefined,
-    onProgress: (event) => {
-      if (loadId !== activeLoad) return;
-      setLoading(file, event.loaded, event.total || file.size);
-    },
-  });
-
-  // Match the viewer convention: file-space +Y down / +Z forward
-  // becomes Three.js +Y up / -Z forward without changing decoded splat data.
-  candidate.quaternion.set(1, 0, 0, 0);
-
+  let candidate;
   try {
+    candidate = new SplatMesh({
+      url,
+      file: url === undefined ? file : undefined,
+      fileName: file.name,
+      fileType,
+      onProgress: (event) => {
+        if (loadId !== activeLoad) return;
+        setLoading(file, event.loaded, event.total || file.size);
+      },
+    });
+
+    // Match the viewer convention: file-space +Y down / +Z forward
+    // becomes Three.js +Y up / -Z forward without changing decoded splat data.
+    candidate.quaternion.set(1, 0, 0, 0);
+
     await candidate.initialized;
 
     if (loadId !== activeLoad) {
@@ -1051,7 +1064,7 @@ async function loadFile(
     setStatus("Loaded and ready", "success");
     clearLoading();
   } catch (error) {
-    candidate.dispose();
+    candidate?.dispose();
     if (loadId !== activeLoad) return;
 
     clearLoading();
@@ -1060,70 +1073,19 @@ async function loadFile(
     console.error(`Failed to load ${file.name}`, error);
     showToast(`Could not load ${file.name}: ${detail}`);
   } finally {
-    if (activeLoadController === controller) {
-      activeLoadController = null;
-    }
-  }
-}
-
-async function loadRemoteModel(model, button) {
-  activeLoadController?.abort();
-  const controller = new AbortController();
-  activeLoadController = controller;
-  remoteRequestByButton.set(button, controller);
-
-  const requestId = ++activeLoad;
-  const pendingFile = { name: model.name, size: model.size };
-  button.disabled = true;
-  setLoading(pendingFile, -1, 0);
-  setStatus(`Loading ${model.name}`, "loading");
-
-  try {
-    const response = await fetch(model.url, { signal: controller.signal });
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`);
-    }
-    if (!response.body) {
-      throw new Error("The response did not include a readable stream");
-    }
-    if (requestId !== activeLoad) return;
-
-    const contentLength = Number(response.headers.get("content-length"));
-    const file = {
-      name: model.name,
-      size: contentLength > 0 ? contentLength : model.size,
-      stream: () => response.body,
-    };
-    await loadFile(file, {
-      credit: model.credit,
-      remoteController: controller,
-      loadToken: requestId,
-    });
-  } catch (error) {
-    if (requestId !== activeLoad || controller.signal.aborted) return;
-    clearLoading();
-    setStatus(`Could not load ${model.name}`, "error");
-    const detail =
-      error instanceof TypeError
-        ? "Request failed. Check the URL and the server's CORS headers."
-        : error instanceof Error
-          ? error.message
-          : String(error);
-    console.error(`Failed to load ${model.name}`, error);
-    showToast(`Could not load ${model.name}: ${detail}`);
-  } finally {
-    if (activeLoadController === controller) {
-      activeLoadController = null;
-    }
-    if (remoteRequestByButton.get(button) === controller) {
+    if (button && remoteRequestByButton.get(button) === loadId) {
       remoteRequestByButton.delete(button);
       button.disabled = false;
     }
   }
 }
 
-function loadExample() {
-  loadRemoteModel(EXAMPLE_MODEL, loadExampleButton);
+function loadRemoteModel(model, button) {
+  return loadFile(model, {
+    url: model.url.toString(),
+    credit: model.credit,
+    button,
+  });
 }
 
 function openFilePicker() {
@@ -1153,27 +1115,25 @@ sourcePanelToggle.addEventListener("click", () => {
   setSourcePanelOpen(true, { moveFocus: true });
 });
 
-sourcePanelClose.addEventListener("click", () => {
-  setSourcePanelOpen(false);
-  sourcePanelToggle.focus();
-});
+sourcePanelClose.addEventListener("click", closeSourcePanel);
 
 sourcePanelBackdrop.addEventListener("click", () => {
   if (!activeSplat) return;
-  setSourcePanelOpen(false);
-  sourcePanelToggle.focus();
+  closeSourcePanel();
 });
 
 loadingCancelButton.addEventListener("click", cancelLoading);
 
-loadExampleButton.addEventListener("click", loadExample);
+loadExampleButton.addEventListener("click", () => {
+  loadRemoteModel(EXAMPLE_MODEL, loadExampleButton);
+});
 
 urlForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const model = modelFromUrl(modelUrlInput.value.trim());
   if (!model) {
-    showToast("Enter a valid HTTP(S) URL ending in .ply or .spz.");
-    setStatus("Enter a valid PLY or SPZ URL", "error");
+    showToast("Enter a valid HTTP(S) URL ending in .ply, .spz, or .sog.");
+    setStatus("Enter a valid PLY, SPZ, or SOG URL", "error");
     modelUrlInput.focus();
     return;
   }
@@ -1204,10 +1164,7 @@ renderOptionsToggle.addEventListener("click", () => {
   setRenderOptionsOpen(renderOptionsPanel.hidden);
 });
 
-renderOptionsClose.addEventListener("click", () => {
-  setRenderOptionsOpen(false);
-  renderOptionsToggle.focus();
-});
+renderOptionsClose.addEventListener("click", closeRenderOptions);
 
 renderOptionsReset.addEventListener("click", resetRenderOptions);
 
@@ -1217,11 +1174,9 @@ window.addEventListener("keydown", (event) => {
   if (!loadingPanel.hidden) {
     cancelLoading();
   } else if (!renderOptionsPanel.hidden) {
-    setRenderOptionsOpen(false);
-    renderOptionsToggle.focus();
+    closeRenderOptions();
   } else if (!emptyState.hidden && activeSplat) {
-    setSourcePanelOpen(false);
-    sourcePanelToggle.focus();
+    closeSourcePanel();
   }
 });
 
@@ -1257,8 +1212,8 @@ window.addEventListener("drop", (event) => {
   if (file) {
     loadFile(file);
   } else {
-    showToast("No supported file found. Drop a .ply or .spz file.");
-    setStatus("Only PLY and SPZ files are supported", "error");
+    showToast("No supported file found. Drop a .ply, .spz, or .sog file.");
+    setStatus("Only PLY, SPZ, and SOG files are supported", "error");
   }
 });
 
@@ -1266,7 +1221,6 @@ window.addEventListener("blur", clearDragState);
 
 window.addEventListener("resize", resizeRenderer);
 window.addEventListener("beforeunload", () => {
-  activeLoadController?.abort();
   renderer.setAnimationLoop(null);
   frameGate.dispose();
   controls.removeEventListener("update", requestRender);

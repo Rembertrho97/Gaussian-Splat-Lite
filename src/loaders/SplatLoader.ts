@@ -1,17 +1,17 @@
 import { Loader } from "three";
 import { Splats, type SplatsOptions } from "../data/Splats";
 import { workerPool } from "../runtime/SplatWorker";
+import type { SplatLoadStatus } from "../runtime/worker";
 import { SplatMesh } from "../scene/SplatMesh";
 import { serializeSplatPostDecode } from "./postDecode";
 
 type SplatLoadOptions = Pick<
   SplatsOptions,
   | "url"
+  | "file"
   | "fileBytes"
   | "fileType"
   | "fileName"
-  | "stream"
-  | "streamLength"
   | "postDecode"
   | "onProgress"
 > & {
@@ -20,7 +20,7 @@ type SplatLoadOptions = Pick<
   onError?: (error: unknown) => void;
 };
 
-// SplatLoader implements the THREE.Loader interface for PLY and SPZ files.
+// SplatLoader implements the THREE.Loader interface for PLY, SPZ and SOG.
 export class SplatLoader extends Loader {
   load(
     url: string,
@@ -49,107 +49,92 @@ export class SplatLoader extends Loader {
   async loadInternalAsync({
     splats,
     url,
+    file,
     fileBytes,
     fileType,
     fileName,
-    stream,
-    streamLength,
     postDecode,
     onLoad,
     onProgress,
     onError,
   }: SplatLoadOptions): Promise<Splats> {
     let resolvedURL: string | undefined;
-    let streamReader: ReadableStreamDefaultReader | undefined;
     let started = false;
     try {
+      if (
+        [url, file, fileBytes].filter((input) => input !== undefined).length !==
+        1
+      ) {
+        throw new Error("Provide exactly one of url, file, or fileBytes");
+      }
+      fileName ??= (file as File | undefined)?.name;
       const byteArray =
         fileBytes instanceof ArrayBuffer
           ? new Uint8Array(fileBytes)
           : fileBytes;
-      resolvedURL = byteArray
-        ? undefined
-        : this.manager.resolveURL((this.path ?? "") + (url ?? ""));
-      streamReader = stream?.getReader();
+      resolvedURL =
+        url === undefined
+          ? undefined
+          : this.manager.resolveURL((this.path ?? "") + url);
       started = true;
       this.manager.itemStart(resolvedURL ?? "");
 
-      return await workerPool.withWorker(async (worker) => {
-        const readStreamChunk = async () => {
-          const reader = streamReader;
-          if (!reader) return new Uint8Array(0);
-
-          try {
-            const { done, value } = await reader.read();
-            if (!done) return value;
-
-            reader.releaseLock();
-            streamReader = undefined;
-            return new Uint8Array(0);
-          } catch (error) {
-            await worker.call("nextChunk", { chunk: new Uint8Array(0) });
-            throw error;
-          }
-        };
-
-        const onStatus = async (data: unknown) => {
-          const { loaded, total } = data as {
-            loaded?: number;
-            total?: number;
-          };
-          if (loaded !== undefined && onProgress) {
-            try {
-              onProgress(
-                new ProgressEvent("progress", {
-                  lengthComputable: total !== 0,
-                  loaded,
-                  total: total ?? 0,
-                }),
-              );
-            } catch (error) {
-              console.error("Progress callback failed", error);
-            }
-          }
-
-          if ((data as { nextChunk?: boolean }).nextChunk) {
-            const chunk = await readStreamChunk();
-            await worker.call("nextChunk", { chunk });
-          }
-        };
-
-        const basedUrl = resolvedURL
-          ? new URL(resolvedURL, window.location.href).toString()
-          : undefined;
-        const decoded = await worker.call(
-          "loadSplats",
-          {
-            url: basedUrl,
-            requestHeader: this.requestHeader,
-            withCredentials: this.withCredentials,
-            fileBytes: byteArray?.slice(),
-            fileType,
-            pathName: resolvedURL || fileName,
-            chunked: stream !== undefined,
-            chunkedLength: streamLength,
-            postDecode: postDecode
-              ? serializeSplatPostDecode(postDecode)
-              : undefined,
-          },
-          { onStatus },
-        );
-
-        const result = splats ?? new Splats();
-        result.initialize(decoded as SplatsOptions);
-        onLoad?.(result);
-        return result;
-      });
+      const pathName = resolvedURL || fileName;
+      const baseUrl = new URL(pathName || "", window.location.href).href;
+      const memoryHeavy =
+        fileType === "sog" ||
+        (!fileType && !/\.(ply|spz)(?:[?#]|$)/i.test(pathName ?? ""));
+      const decoded = await workerPool.withWorker(
+        (worker) =>
+          worker.call(
+            "loadSplats",
+            {
+              url: resolvedURL ? baseUrl : undefined,
+              requestHeader: this.requestHeader,
+              withCredentials: this.withCredentials,
+              file,
+              fileBytes: byteArray?.slice(),
+              fileType,
+              pathName,
+              baseUrl,
+              postDecode: postDecode
+                ? serializeSplatPostDecode(postDecode)
+                : undefined,
+            },
+            {
+              onStatus: (data) => {
+                const status = data as SplatLoadStatus;
+                if ("assetRequest" in status) {
+                  return worker.call("resolveAsset", {
+                    requestId: status.assetRequest,
+                    url: new URL(
+                      this.manager.resolveURL(status.url),
+                      window.location.href,
+                    ).href,
+                  });
+                }
+                if (onProgress) {
+                  try {
+                    onProgress(
+                      new ProgressEvent("progress", {
+                        lengthComputable: status.total !== 0,
+                        ...status,
+                      }),
+                    );
+                  } catch (error) {
+                    console.error("Progress callback failed", error);
+                  }
+                }
+              },
+            },
+          ),
+        memoryHeavy,
+      );
+      const result = splats ?? new Splats();
+      result.initialize(decoded as SplatsOptions);
+      onLoad?.(result);
+      return result;
     } catch (error) {
-      try {
-        await streamReader?.cancel(error);
-      } catch {
-        // Preserve the original error if stream cancellation fails.
-      }
-      streamReader?.releaseLock();
       if (started) this.manager.itemError(resolvedURL ?? "");
       onError?.(error);
       throw error;

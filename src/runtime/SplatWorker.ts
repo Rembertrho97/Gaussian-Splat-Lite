@@ -15,14 +15,19 @@ export class SplatWorker {
   worker: Worker;
   messages: Record<number, PromiseRecord> = {};
   peakWasmMemoryBytes = 0;
+  disposed = false;
   static currentId = 0;
 
   constructor() {
     this.worker = new BundledWorker();
     this.worker.onmessage = (event) => this.onMessage(event);
-    WASM_MODULE.then((module) => {
-      this.worker.postMessage({ name: "init-wasm", module });
-    });
+    this.worker.onerror = (event) => this.dispose(new Error(event.message));
+    this.worker.onmessageerror = () =>
+      this.dispose(new Error("Invalid worker message"));
+    void WASM_MODULE.then((module) => {
+      if (!this.disposed)
+        this.worker.postMessage({ name: "init-wasm", module });
+    }).catch((error) => this.dispose(error));
   }
 
   onMessage(event: MessageEvent) {
@@ -42,7 +47,7 @@ export class SplatWorker {
           return promise.onStatus?.(status);
         }
       });
-      void promise.statusQueue.catch(() => {});
+      void promise.statusQueue.catch((error) => this.dispose(error));
       return;
     }
 
@@ -65,6 +70,7 @@ export class SplatWorker {
     } = {},
   ): Promise<Awaited<ReturnType<RpcHandlers[Name]>>> {
     type Result = Awaited<ReturnType<RpcHandlers[Name]>>;
+    if (this.disposed) throw new Error("Worker terminated");
     const id = ++SplatWorker.currentId;
     const promise = new Promise<Result>((resolve, reject) => {
       this.messages[id] = {
@@ -74,20 +80,27 @@ export class SplatWorker {
         statusQueue: Promise.resolve(),
       };
     });
-    this.worker.postMessage(
-      { id, name, args },
-      { transfer: getTransferable(args) },
-    );
+    try {
+      this.worker.postMessage(
+        { id, name, args },
+        { transfer: getTransferable(args) },
+      );
+    } catch (error) {
+      this.messages[id].reject(error);
+      delete this.messages[id];
+    }
     return promise;
   }
 
-  dispose() {
+  dispose(reason: unknown = new Error("Worker terminated")) {
+    if (this.disposed) return;
+    this.disposed = true;
     this.worker.terminate();
 
     const messages = Object.values(this.messages);
     this.messages = {};
     for (const message of messages) {
-      message.reject(new Error("Worker terminate"));
+      message.reject(reason);
     }
   }
 }
@@ -141,6 +154,7 @@ function getWorkerReuseIndex(
 }
 
 class SplatWorkerPool {
+  private heavyJobs: Promise<void> = Promise.resolve();
   maxWorkers;
   numWorkers = 0;
   freelist: SplatWorker[] = [];
@@ -153,7 +167,17 @@ class SplatWorkerPool {
 
   async withWorker<T>(
     callback: (worker: SplatWorker) => Promise<T>,
+    memoryHeavy = false,
   ): Promise<T> {
+    if (memoryHeavy) {
+      const next = this.heavyJobs.then(() => this.withWorker(callback));
+      this.heavyJobs = next.then(
+        () => {},
+        () => {},
+      );
+      return next;
+    }
+
     const worker = await this.allocWorker();
     try {
       return await callback(worker);
@@ -163,6 +187,14 @@ class SplatWorkerPool {
   }
 
   async allocWorker(): Promise<SplatWorker> {
+    for (let index = this.freelist.length - 1; index >= 0; index--) {
+      const worker = this.freelist[index];
+      if (!worker.disposed) continue;
+      clearTimeout(this.idleWorkerTimeouts.get(worker));
+      this.idleWorkerTimeouts.delete(worker);
+      this.freelist.splice(index, 1);
+      this.numWorkers -= 1;
+    }
     const workerIndex = getWorkerReuseIndex(this.freelist);
     if (workerIndex !== -1) {
       const worker = this.freelist.splice(workerIndex, 1)[0];
@@ -186,6 +218,15 @@ class SplatWorkerPool {
   }
 
   freeWorker(worker: SplatWorker) {
+    if (worker.disposed) {
+      this.numWorkers -= 1;
+      const waiter = this.queue.shift();
+      if (waiter) {
+        this.numWorkers += 1;
+        waiter(new SplatWorker());
+      }
+      return;
+    }
     if (this.numWorkers > this.maxWorkers) {
       // Worker no longer needed
       worker.dispose();

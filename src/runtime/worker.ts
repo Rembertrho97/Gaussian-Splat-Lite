@@ -10,13 +10,14 @@ import {
   type PostDecodeSplatData,
   applySplatPostDecode,
 } from "../loaders/postDecodeRuntime";
+import { isSogPrefix, loadSog } from "../loaders/sog";
 import { getTransferable } from "./transferable";
 
 const rpcHandlers = {
   setSortCenterState,
   sortCenters32,
   loadSplats,
-  nextChunk,
+  resolveAsset,
 };
 export type RpcHandlers = typeof rpcHandlers;
 
@@ -117,44 +118,59 @@ async function onMessage(event: MessageEvent) {
   }
 }
 
-async function decodeBytesUrl({
-  decoder,
-  fileBytes,
-  url,
-  requestHeader,
-  withCredentials,
-  chunked,
-  chunkedLength,
-  sendStatus,
-}: {
-  decoder: ChunkDecoder;
-  fileBytes?: Uint8Array;
+type LoadArgs = {
   url?: string;
   requestHeader?: Record<string, string>;
   withCredentials?: boolean;
-  chunked?: boolean;
-  chunkedLength?: number;
-  sendStatus: (data: unknown) => void;
-}) {
-  if (fileBytes) {
-    const byteLength = fileBytes.length;
-    if (byteLength > 0) {
-      decoder.set_expected_input_size(byteLength);
-    }
-    sendStatus({ loaded: byteLength, total: byteLength });
-    decoder.push(fileBytes);
-    return decoder.finish();
+  file?: Blob;
+  fileBytes?: Uint8Array;
+  fileType?: string;
+  pathName?: string;
+  baseUrl?: string;
+  postDecode?: SerializedSplatPostDecode;
+};
+
+export type SplatLoadStatus =
+  | { loaded: number; total: number }
+  | { assetRequest: number; url: string };
+
+type DecodeArgs = LoadArgs & {
+  sendStatus: (data: SplatLoadStatus) => void;
+  resolveAsset: (url: string) => Promise<string>;
+};
+
+async function decodeInput(args: DecodeArgs) {
+  const {
+    file,
+    fileType,
+    pathName,
+    baseUrl,
+    url,
+    requestHeader,
+    withCredentials,
+    sendStatus,
+    resolveAsset,
+  } = args;
+  let { fileBytes } = args;
+  if (
+    fileType === "sog" ||
+    (!fileType &&
+      (/(?:\.sog|(?:^|\/)meta\.json)(?:[?#]|$)/i.test(pathName ?? url ?? "") ||
+        (fileBytes && isSogPrefix(fileBytes)) ||
+        (file &&
+          isSogPrefix(
+            new Uint8Array(await file.slice(0, 4096).arrayBuffer()),
+          ))))
+  ) {
+    return loadSog(args);
   }
 
-  const suppliedInputLength = chunkedLength ?? 0;
-  if (!Number.isSafeInteger(suppliedInputLength) || suppliedInputLength < 0) {
-    throw new Error("streamLength must be a non-negative integer");
-  }
-  let streamLength = suppliedInputLength;
-  let expectedInputLength = 0;
-  let responseBody: ReadableStream<Uint8Array> | undefined;
+  let streamLength = fileBytes?.length ?? file?.size ?? 0;
+  let expectedInputLength = streamLength;
+  let responseBody = file?.stream();
+  let responseUrl = url;
 
-  if (url) {
+  if (!fileBytes && url) {
     const request = new Request(url, {
       headers: requestHeader ? new Headers(requestHeader) : undefined,
       credentials: withCredentials ? "include" : "same-origin",
@@ -167,6 +183,7 @@ async function decodeBytesUrl({
       );
     }
     responseBody = response.body;
+    responseUrl = response.url;
     const contentLength = Number(response.headers.get("Content-Length") || "0");
     const responseLength =
       Number.isSafeInteger(contentLength) && contentLength > 0
@@ -182,32 +199,69 @@ async function decodeBytesUrl({
     if (response.type === "basic" && hasIdentityEncoding) {
       expectedInputLength = responseLength;
     }
-  } else if (!chunked) {
-    throw new Error("No url or fileBytes provided");
+  } else if (!fileBytes && !file) {
+    throw new Error("No url, file, or fileBytes provided");
   }
 
   const streamReader = responseBody?.getReader();
   const readInputChunk = async () => {
-    if (streamReader) {
-      const { done, value } = await streamReader.read();
-      return done ? undefined : value;
+    if (fileBytes) {
+      const chunk = fileBytes;
+      fileBytes = undefined;
+      return chunk;
     }
-
-    const chunk = await new Promise<Uint8Array>((resolve) => {
-      nextChunkWaiter = resolve;
-      sendStatus({ nextChunk: true });
-    });
-    return chunk.length === 0 ? undefined : chunk;
+    if (streamReader) {
+      for (;;) {
+        const { done, value } = await streamReader.read();
+        if (done) return undefined;
+        if (value.length) return value;
+      }
+    }
   };
 
   let loaded = 0;
+  let decoder: ChunkDecoder | undefined;
   try {
+    // Keep the sniffed prefix for either decoder, including tiny stream chunks.
+    const pending: Uint8Array[] = [];
+    const prefix = new Uint8Array(4096);
+    let prefixSize = 0;
+    if (!fileType && !file && !fileBytes) {
+      while (prefixSize < prefix.length) {
+        const chunk = await readInputChunk();
+        if (!chunk) break;
+        pending.push(chunk);
+        const count = Math.min(chunk.length, prefix.length - prefixSize);
+        prefix.set(chunk.subarray(0, count), prefixSize);
+        prefixSize += count;
+        if (
+          prefixSize >= 4 &&
+          new TextDecoder().decode(prefix.subarray(0, prefixSize)).trim()
+        )
+          break;
+      }
+      if (isSogPrefix(prefix.subarray(0, prefixSize))) {
+        const crossOrigin =
+          url &&
+          responseUrl &&
+          new URL(url).origin !== new URL(responseUrl).origin;
+        return await loadSog({
+          readChunk: async () => pending.shift() ?? readInputChunk(),
+          baseUrl: responseUrl ?? baseUrl,
+          requestHeader: crossOrigin ? undefined : requestHeader,
+          withCredentials: !crossOrigin && withCredentials,
+          sendStatus,
+          resolveAsset,
+        });
+      }
+    }
+    decoder = decode_to_splats(fileType, pathName ?? url);
     if (expectedInputLength > 0) {
       decoder.set_expected_input_size(expectedInputLength);
     }
 
     while (true) {
-      const value = await readInputChunk();
+      const value = pending.shift() ?? (await readInputChunk());
       if (!value) break;
 
       loaded += value.length;
@@ -226,11 +280,13 @@ async function decodeBytesUrl({
       );
     }
 
-    if (chunked && streamLength === 0) {
+    if (streamLength === 0) {
       sendStatus({ loaded, total: loaded });
     }
 
-    return decoder.finish();
+    const complete = decoder;
+    decoder = undefined;
+    return complete.finish();
   } catch (error) {
     try {
       await streamReader?.cancel(error);
@@ -239,11 +295,26 @@ async function decodeBytesUrl({
     }
     throw error;
   } finally {
+    decoder?.free();
     streamReader?.releaseLock();
   }
 }
 
-function toSplatResult(decoded: PostDecodeSplatData): SplatResult {
+async function loadSplats(
+  args: LoadArgs,
+  { sendStatus }: { sendStatus: (data: SplatLoadStatus) => void },
+): Promise<SplatResult> {
+  const decoded = (await decodeInput({
+    ...args,
+    sendStatus,
+    resolveAsset: (url) =>
+      new Promise<string>((resolve) => {
+        const requestId = ++assetRequestId;
+        assetRequests.set(requestId, resolve);
+        sendStatus({ assetRequest: requestId, url });
+      }),
+  })) as PostDecodeSplatData;
+  if (args.postDecode) applySplatPostDecode(decoded, args.postDecode);
   return {
     numSplats: decoded.numSplats,
     splatArrays: [decoded.splat0, decoded.splat1],
@@ -257,49 +328,12 @@ function toSplatResult(decoded: PostDecodeSplatData): SplatResult {
   };
 }
 
-async function loadSplats(
-  {
-    url,
-    requestHeader,
-    withCredentials,
-    fileBytes,
-    fileType,
-    pathName,
-    chunked,
-    chunkedLength,
-    postDecode,
-  }: {
-    url?: string;
-    requestHeader?: Record<string, string>;
-    withCredentials?: boolean;
-    fileBytes?: Uint8Array;
-    fileType?: string;
-    pathName?: string;
-    chunked?: boolean;
-    chunkedLength?: number;
-    postDecode?: SerializedSplatPostDecode;
-  },
-  { sendStatus }: { sendStatus: (data: unknown) => void },
-) {
-  const decoder = decode_to_splats(fileType, pathName ?? url);
-  const decoded = (await decodeBytesUrl({
-    decoder,
-    fileBytes,
-    url,
-    requestHeader,
-    withCredentials,
-    chunked,
-    chunkedLength,
-    sendStatus,
-  })) as PostDecodeSplatData;
-  if (postDecode) applySplatPostDecode(decoded, postDecode);
-  return toSplatResult(decoded);
-}
+let assetRequestId = 0;
+const assetRequests = new Map<number, (url: string) => void>();
 
-let nextChunkWaiter = (_chunk: Uint8Array) => {};
-
-async function nextChunk({ chunk }: { chunk: Uint8Array }) {
-  nextChunkWaiter(chunk);
+function resolveAsset({ requestId, url }: { requestId: number; url: string }) {
+  assetRequests.get(requestId)?.(url);
+  assetRequests.delete(requestId);
 }
 
 async function initialize() {
@@ -330,4 +364,8 @@ async function initialize() {
   pending.length = 0;
 }
 
-initialize().catch(console.error);
+void initialize().catch((error) => {
+  setTimeout(() => {
+    throw error;
+  });
+});

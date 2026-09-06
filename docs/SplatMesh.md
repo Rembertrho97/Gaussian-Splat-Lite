@@ -10,20 +10,16 @@ new SplatMesh(options?: SplatMeshOptions)
 
 ## Loading
 
-Use `url` for remote files. For a local PLY/SPZ file:
+Use `url` for remote files. For a local PLY/SPZ/SOG file:
 
 ```js
 const file = fileInput.files[0];
-const splat = new SplatMesh({
-  fileName: file.name,
-  stream: file.stream(),
-  streamLength: file.size,
-});
+const splat = new SplatMesh({ file });
 scene.add(splat);
 await splat.initialized;
 ```
 
-Files are decoded locally. For bytes, use `fileBytes: bytes` with `fileName` or `fileType`. A URL without a recognized extension also needs one of these format hints.
+`file` accepts a `File` or `Blob`. For bytes, use `fileBytes: bytes`; `fileName` or `fileType` can supply an explicit format hint for any input.
 
 To create Splats in code:
 
@@ -47,24 +43,23 @@ await splat.initialized;
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `url` | `string` | `undefined` | PLY/SPZ file URL |
+| `url` | `string` | `undefined` | PLY/SPZ/SOG file or SOG metadata URL |
+| `file` | `Blob` (including `File`) | `undefined` | Local file |
 | `fileBytes` | `Uint8Array \| ArrayBuffer` | `undefined` | Complete file data in memory |
-| `fileType` | `SplatFileType` | Inferred from name | Explicitly selects `PLY` or `SPZ` |
-| `fileName` | `string` | `undefined` | Supplies a name for inferring the format of byte or stream input |
-| `stream` | `ReadableStream` | `undefined` | Chunked input stream |
-| `streamLength` | `number` | `undefined` | Optional input-stream byte-length estimate used for progress reporting |
+| `fileType` | `SplatFileType` | Inferred from name | Explicitly selects `PLY`, `SPZ`, or `SOG` |
+| `fileName` | `string` | `File.name` when available | Supplies a name for inferring the input format |
 | `postDecode` | `SplatPostDecodeProgram` | `undefined` | **`Experimental`** Serializable per-Splat transform executed in the decode worker |
 | `splats` | `Splats` | New `Splats` | Uses an existing `Splats` instance |
 | `maxSplats` | `number` | `0` | Initial capacity for programmatic construction; grows when necessary |
 | `constructSplats` | `(splats) => void \| Promise<void>` | `undefined` | Populates `Splats` during initialization |
-| `onProgress` | `(event: ProgressEvent) => void` | `undefined` | Download or stream decoding progress callback |
+| `onProgress` | `(event: ProgressEvent) => void` | `undefined` | Download or file-reading progress callback |
 | `onLoad` | `(mesh) => void \| Promise<void>` | `undefined` | Called after initialization completes |
 | `editable` | `boolean` | `true` | Applies global and local SDF edits |
 | `raycastable` | `boolean` | `true` | Participates in Three.js raycasting |
 | `minRaycastOpacity` | `number` | `0.1` | Per-Splat kernel-alpha threshold; clips the raycast hit area at this opacity, including special-shape Splats |
 | `onFrame` | `({ mesh, time, deltaTime }) => void` | `undefined` | Called before Splat generation for a frame |
 
-Choose at most one of `url`, `fileBytes`, `stream`, `splats`, or `constructSplats`; mixing inputs throws.
+Choose at most one of `url`, `file`, `fileBytes`, `splats`, or `constructSplats`; mixing inputs throws.
 
 ## Common properties
 

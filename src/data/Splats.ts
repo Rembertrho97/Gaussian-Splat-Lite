@@ -40,12 +40,10 @@ type DecodedSplatWithSh = DecodedSplat & { sh: THREE.Color[] };
 
 export type SplatsOptions = {
   url?: string;
+  file?: Blob;
   fileBytes?: Uint8Array | ArrayBuffer;
   fileType?: SplatFileType;
   fileName?: string;
-  stream?: ReadableStream;
-  /** Optional stream byte-length estimate used for progress reporting. */
-  streamLength?: number;
   /** Declarative per-splat transform executed in the decode worker. */
   postDecode?: SplatPostDecodeProgram;
   maxSplats?: number;
@@ -69,23 +67,16 @@ type SplatsState = {
   sortCentersDirty: boolean;
 };
 
-function getInitializationInputs(
-  options: SplatsInitializationOptions,
-): string[] {
+function validateInitializationInputs(options: SplatsInitializationOptions) {
   const inputs: string[] = [];
   if (options.url !== undefined) inputs.push("url");
+  if (options.file !== undefined) inputs.push("file");
   if (options.fileBytes !== undefined) inputs.push("fileBytes");
-  if (options.stream !== undefined) inputs.push("stream");
   if (options.splatArrays !== undefined) inputs.push("splatArrays");
   if (options.construct !== undefined) inputs.push("construct");
-  return inputs;
-}
-
-function validateInitializationInputs(options: SplatsInitializationOptions) {
-  const inputs = getInitializationInputs(options);
   if (inputs.length > 1) {
     throw new Error(
-      `Splats initialization inputs are mutually exclusive; provide only one of url, fileBytes, stream, splatArrays, or construct (received: ${inputs.join(", ")})`,
+      `Splats initialization inputs are mutually exclusive; provide only one of url, file, fileBytes, splatArrays, or construct (received: ${inputs.join(", ")})`,
     );
   }
 }
@@ -93,8 +84,8 @@ function validateInitializationInputs(options: SplatsInitializationOptions) {
 function hasFileInput(options: SplatsOptions) {
   return (
     options.url !== undefined ||
-    options.fileBytes !== undefined ||
-    options.stream !== undefined
+    options.file !== undefined ||
+    options.fileBytes !== undefined
   );
 }
 
@@ -249,11 +240,10 @@ export class Splats {
       const { SplatLoader } = await import("../loaders/SplatLoader");
       return new SplatLoader().loadInternalAsync({
         url: options.url,
+        file: options.file,
         fileBytes: options.fileBytes,
         fileType: options.fileType,
         fileName: options.fileName,
-        stream: options.stream,
-        streamLength: options.streamLength,
         postDecode: options.postDecode,
         onProgress: options.onProgress,
       });

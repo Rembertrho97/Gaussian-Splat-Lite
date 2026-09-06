@@ -127,8 +127,9 @@
           <p class="eyebrow">Gaussian Splatting Viewer</p>
           <h1 id="viewer-title">Drop a splat file here</h1>
           <p class="empty-description">
-            Choose a <strong>.ply</strong> or <strong>.spz</strong> file from your
-            device, or load one from a URL. The model is decoded in this browser.
+            Choose a <strong>.ply</strong>, <strong>.spz</strong>, or
+            <strong>.sog</strong> file from your device, or load one from a URL.
+            The model is decoded in this browser.
           </p>
           <div class="source-actions">
             <button
@@ -137,7 +138,7 @@
               type="button"
               data-file-picker
             >
-              Choose PLY or SPZ
+              Choose PLY, SPZ, or SOG
             </button>
             <button
               id="load-example"
@@ -152,7 +153,7 @@
           </div>
           <form id="url-form" class="url-form">
             <label class="visually-hidden" for="model-url">
-              PLY or SPZ model URL
+              PLY, SPZ, or SOG model URL
             </label>
             <input
               id="model-url"
@@ -255,12 +256,12 @@
       <div class="drop-overlay-card">
         <span class="drop-plus" aria-hidden="true">+</span>
         <strong>Drop to open</strong>
-        <span>PLY and SPZ files only</span>
+        <span>PLY, SPZ, and SOG files only</span>
       </div>
     </div>
 
     <div id="toast" class="toast" role="alert" hidden></div>
-    <input id="file-input" type="file" accept=".ply,.spz" hidden />
+    <input id="file-input" type="file" accept=".ply,.spz,.sog" hidden />
 
     <script type="module" src="/examples/viewer/viewer.js"></script>
   </body>

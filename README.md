@@ -14,7 +14,7 @@
 
 </div>
 
-A lightweight 3D Gaussian Splatting renderer for Three.js, with **WebGPU**, **depth rendering for scene occlusion**, and WebGL2 support. Load PLY/SPZ files into standard Three.js scenes and render multiple Splat objects together. Based on a simplified [SparkJS](https://github.com/sparkjsdev/spark) architecture.
+A lightweight 3D Gaussian Splatting renderer for Three.js, with **WebGPU**, **depth rendering for scene occlusion**, and WebGL2 support. Load PLY/SPZ/SOG files into standard Three.js scenes and render multiple Splat objects together. Based on a simplified [SparkJS](https://github.com/sparkjsdev/spark) architecture.
 
 ## Features
 
@@ -24,7 +24,7 @@ A lightweight 3D Gaussian Splatting renderer for Three.js, with **WebGPU**, **de
 | **Depth Rendering** | Separate depth draw in input order with stochastic coverage at transparent edges |
 | **Stochastic rendering** | Sorting-free rendering for responsive camera movement, with optional spatial resolve to reduce noise |
 | **Three.js integration** | Standard scenes, cameras, transforms, raycasting, and global sorting across multiple `SplatMesh` objects |
-| **Data and precision** | PLY/SPZ from URLs, bytes, or streams; camera-relative rendering for large GIS/ECEF coordinates |
+| **Data and precision** | PLY/SPZ/SOG from URLs, files, or bytes; camera-relative rendering for large GIS/ECEF coordinates |
 
 Also includes spherical harmonics, SDF edits, offscreen capture, and TypeScript declarations.
 
@@ -110,7 +110,7 @@ With default depth settings, the companion draw runs on non-stochastic frames in
 - [SplatMesh](docs/SplatMesh.md) — Loading, transforms, animation, and raycasting.
 - [SplatLoader](docs/SplatLoader.md) — File loading.
 - [Splats](docs/Splats.md) — Data access and updates.
-- [SplatFileType](docs/SplatFileType.md) — PLY/SPZ formats.
+- [SplatFileType](docs/SplatFileType.md) — PLY/SPZ/SOG formats.
 - [SplatEdit / SplatEditSdf](docs/SplatEdit.md) — Color and opacity editing.
 - [postDecode](docs/PostDecode.md) — Experimental decode transformations.
 - [SplatAccumulator](docs/SplatAccumulator.md) — Low-level GPU buffers.
@@ -125,7 +125,7 @@ npm run build:wasm
 npm run dev
 ```
 
-Open the URL printed by Vite (normally `http://localhost:8080/`) and drop a `.ply` or `.spz` file into the viewer. Files are decoded locally. Switch **WebGL / WebGPU** in the viewer to compare backends; disable automatic stochastic mode to expose the **Force Splat depth** control.
+Open the URL printed by Vite (normally `http://localhost:8080/`) and drop a `.ply`, `.spz`, or `.sog` file into the viewer, choose a local file, or load one from an HTTP(S) URL. Files are decoded locally. Switch **WebGL / WebGPU** in the viewer to compare backends; disable automatic stochastic mode to expose the **Force Splat depth** control.
 
 See [Contributing](CONTRIBUTING.md#validation) for validation and release commands. `npm run build` emits ESM, CommonJS, TypeScript declarations, and source maps in `dist/`.
 
